@@ -7,7 +7,7 @@ import 'dart:convert';
 // 1. O Riverpod cria uma "antena" que vai chamar o Python
 final apiProvider = FutureProvider<String>((ref) async {
   // Bate na rota "/" do FastAPI que criamos antes
-  final response = await http.get(Uri.parse('http://127.0.0.1:8000/'));
+  final response = await http.get(Uri.parse('http://192.168.15.20:8000/'));
 
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);

@@ -12,3 +12,6 @@ build-ios:
 
 build-android:
 	flutter build appbundle
+
+deploy-iphone:
+	flutter run --release
