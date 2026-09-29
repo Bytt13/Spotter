@@ -1,23 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
 import 'dart:convert';
 
-// 1. O Riverpod cria uma "antena" que vai chamar o Python
-final apiProvider = FutureProvider<String>((ref) async {
-  // Bate na rota "/" do FastAPI que criamos antes
-  final response = await http.get(Uri.parse('http://192.168.15.20:8000/'));
-
-  if (response.statusCode == 200) {
-    final data = jsonDecode(response.body);
-    return data['mensagem']; // Pega a mensagem do JSON do Python
-  } else {
-    throw Exception('Falha ao conectar com o Servidor Spotter');
-  }
-});
-
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   runApp(const ProviderScope(child: SpotterApp()));
 }
 
@@ -30,61 +20,146 @@ class SpotterApp extends StatelessWidget {
       title: 'Spotter',
       theme: ThemeData(
         brightness: Brightness.dark,
-        primaryColor: Colors.deepOrange, // Nosso laranja
+        primaryColor: Colors.deepOrange,
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.deepOrange, // Aplicando o laranja no botão
+            backgroundColor: Colors.deepOrange,
             foregroundColor: Colors.white,
           ),
         ),
       ),
-      home: const HomeSpotter(),
+      home: const ChatSpotterScreen(),
     );
   }
 }
 
-class HomeSpotter extends ConsumerWidget {
-  const HomeSpotter({super.key});
+// ==========================================
+// ESTADO MODERNO (Padrão Riverpod Notifier)
+// ==========================================
+
+// 1. Notifier para controlar o indicador de carregamento
+class LoadingNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+  void set(bool value) => state = value;
+}
+
+final loadingProvider = NotifierProvider<LoadingNotifier, bool>(
+  LoadingNotifier.new,
+);
+
+// 2. Notifier para controlar a resposta da IA na tela
+class RespostaAiNotifier extends Notifier<String> {
+  @override
+  String build() => "Aguardando seu comando para gerar o treino...";
+  void set(String value) => state = value;
+}
+
+final respostaAiProvider = NotifierProvider<RespostaAiNotifier, String>(
+  RespostaAiNotifier.new,
+);
+
+// ==========================================
+// TELA DO CHAT (UI)
+// ==========================================
+
+class ChatSpotterScreen extends ConsumerStatefulWidget {
+  const ChatSpotterScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // 2. O app "escuta" a nossa antena
-    final apiConnection = ref.watch(apiProvider);
+  ConsumerState<ChatSpotterScreen> createState() => _ChatSpotterScreenState();
+}
+
+class _ChatSpotterScreenState extends ConsumerState<ChatSpotterScreen> {
+  final TextEditingController _textController = TextEditingController();
+
+  Future<void> _enviarParaInteligencia() async {
+    final texto = _textController.text.trim();
+    if (texto.isEmpty) return;
+
+    FocusScope.of(context).unfocus();
+
+    // Ativa o loading usando o novo Notifier
+    ref.read(loadingProvider.notifier).set(true);
+
+    try {
+      // IP do seu Mac na rede local (Hardcode pragmático validado)
+      // Lê diretamente do arquivo de ambiente que configuramos
+      final apiUrl = dotenv.env['API_URL'] ?? "http://192.168.15.20:8000";
+
+      final response = await http.post(
+        Uri.parse('$apiUrl/gerar-treino'),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"mensagem_usuario": texto}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        // Atualiza a resposta da IA
+        ref.read(respostaAiProvider.notifier).set(data['treino_gerado']);
+      } else {
+        ref
+            .read(respostaAiProvider.notifier)
+            .set("Erro no Servidor: ${response.statusCode}");
+      }
+    } catch (e) {
+      ref
+          .read(respostaAiProvider.notifier)
+          .set("Erro de Rede: Tente novamente. ($e)");
+    } finally {
+      // Desativa o loading
+      ref.read(loadingProvider.notifier).set(false);
+      _textController.clear();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isLoading = ref.watch(loadingProvider);
+    final resposta = ref.watch(respostaAiProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Spotter API Test',
+          'Spotter Alpha',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         backgroundColor: Colors.black,
       ),
-      body: Center(
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // 3. Reage ao status da conexão (Carregando, Erro ou Sucesso)
-            apiConnection.when(
-              loading: () =>
-                  const CircularProgressIndicator(color: Colors.deepOrange),
-              error: (err, stack) => Text(
-                'Erro de conexão: $err',
-                style: const TextStyle(color: Colors.red),
-              ),
-              data: (mensagem) => Text(
-                mensagem,
-                style: const TextStyle(fontSize: 18, color: Colors.greenAccent),
-                textAlign: TextAlign.center,
+            Expanded(
+              child: SingleChildScrollView(
+                child: Text(
+                  resposta,
+                  style: const TextStyle(fontSize: 16, height: 1.5),
+                ),
               ),
             ),
-            const SizedBox(height: 40),
-            ElevatedButton.icon(
-              onPressed: () {
-                // Atualiza a requisição
-                ref.invalidate(apiProvider);
-              },
-              icon: const Icon(Icons.refresh),
-              label: const Text('Pingar Servidor Python'),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _textController,
+                    decoration: const InputDecoration(
+                      hintText: "Ex: Treino de peito pesado com halteres...",
+                      border: OutlineInputBorder(),
+                    ),
+                    onSubmitted: (_) => _enviarParaInteligencia(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                isLoading
+                    ? const CircularProgressIndicator(color: Colors.deepOrange)
+                    : IconButton(
+                        icon: const Icon(Icons.send, color: Colors.deepOrange),
+                        iconSize: 32,
+                        onPressed: _enviarParaInteligencia,
+                      ),
+              ],
             ),
           ],
         ),
